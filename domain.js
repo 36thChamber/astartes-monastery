@@ -1,0 +1,30 @@
+(function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;else root.Monastery=api;})(globalThis,function(){
+'use strict';
+const KEY='astartes-monastery.v1';
+const clone=x=>JSON.parse(JSON.stringify(x));
+const id=()=>globalThis.crypto?.randomUUID?.()||Date.now().toString(36)+Math.random().toString(36).slice(2);
+const fail=m=>{throw new Error(m)};
+const number=(n,min,max)=>typeof n==='number'&&Number.isFinite(n)&&n>=min&&n<=max;
+const label=s=>typeof s==='string'&&s.trim().length>0&&s.length<=120;
+function initialState(){return {version:1,routines:[{id:'foundation',name:'Rito de força',exercises:[{id:'squat',name:'Agachamento',sets:3,reps:8,weight:0},{id:'bench',name:'Supino',sets:3,reps:8,weight:0},{id:'row',name:'Remada',sets:3,reps:10,weight:0}]}],history:[],active:null};}
+function validExercise(e){return e&&label(e.id)&&label(e.name)&&Number.isInteger(e.sets)&&number(e.sets,1,30)&&Number.isInteger(e.reps)&&number(e.reps,1,500)&&number(e.weight,0,2000);}
+function validSession(s,finished=false){return s&&label(s.id)&&label(s.routineId)&&label(s.name)&&typeof s.startedAt==='string'&&Number.isFinite(Date.parse(s.startedAt))&&(!finished||(typeof s.finishedAt==='string'&&Number.isFinite(Date.parse(s.finishedAt))))&&Array.isArray(s.exercises)&&s.exercises.length>0&&s.exercises.length<=100&&s.exercises.every(e=>e&&label(e.id)&&label(e.name)&&Array.isArray(e.sets)&&e.sets.length>0&&e.sets.length<=30&&e.sets.every(t=>t&&number(t.weight,0,2000)&&Number.isInteger(t.reps)&&number(t.reps,1,500)&&typeof t.done==='boolean'));}
+function validate(s){if(!s||s.version!==1||!Array.isArray(s.routines)||s.routines.length>100||!Array.isArray(s.history)||s.history.length>10000)fail('Backup inválido ou versão incompatível.');if(!s.routines.every(r=>r&&label(r.id)&&label(r.name)&&Array.isArray(r.exercises)&&r.exercises.length>0&&r.exercises.length<=100&&r.exercises.every(validExercise)))fail('Rotina inválida.');if(new Set(s.routines.map(r=>r.id)).size!==s.routines.length)fail('Rotinas duplicadas.');if(!s.history.every(h=>validSession(h,true))||new Set(s.history.map(h=>h.id)).size!==s.history.length)fail('Histórico inválido.');if(s.active!==null&&!validSession(s.active))fail('Sessão inválida.');if(s.active&&s.history.some(h=>h.id===s.active.id))fail('Sessão duplicada.');return s;}
+function startSession(s,routineId){validate(s);if(s.active)fail('Já existe um treino em andamento.');const r=s.routines.find(r=>r.id===routineId);if(!r)fail('Rotina não encontrada.');const n=clone(s);n.active={id:id(),routineId:r.id,name:r.name,startedAt:new Date().toISOString(),exercises:r.exercises.map(e=>({id:e.id,name:e.name,sets:Array.from({length:e.sets},()=>({weight:e.weight,reps:e.reps,done:false}))}))};return n;}
+function updateSet(s,ei,si,patch){const n=clone(s),set=n.active?.exercises[ei]?.sets[si];if(!set)fail('Série não encontrada.');for(const k of ['weight','reps','done'])if(Object.hasOwn(patch,k))set[k]=patch[k];validate(n);return n;}
+function sessionXP(s){const count=s.exercises.reduce((a,e)=>a+e.sets.filter(t=>t.done).length,0);return count?50+count*10:0;}
+function finishSession(s){if(!s.active||!sessionXP(s.active))fail('Conclua pelo menos uma série.');const n=clone(s);n.history.unshift({...n.active,finishedAt:new Date().toISOString()});n.active=null;validate(n);return n;}
+function cancelSession(s){return {...clone(s),active:null};}
+function saveRoutine(s,r){const n=clone(s);const routine={id:r.id||id(),name:r.name?.trim(),exercises:(r.exercises||[]).map(e=>({id:e.id||id(),name:e.name?.trim(),sets:e.sets,reps:e.reps,weight:e.weight}))};const ix=n.routines.findIndex(x=>x.id===routine.id);if(ix<0)n.routines.push(routine);else n.routines[ix]=routine;validate(n);return n;}
+function deleteRoutine(s,rid){const n=clone(s);n.routines=n.routines.filter(r=>r.id!==rid);return n;}
+function totalXP(s){return s.history.reduce((a,h)=>a+sessionXP(h),0);}
+function profileId(profile){if(profile!=='astartes'&&profile!=='sororitas')fail('Trajetória inválida.');return profile;}
+function rankForXP(xp,profile='astartes'){profileId(profile);if(!number(xp,0,Number.MAX_SAFE_INTEGER))fail('XP inválido.');const names=profile==='sororitas'?['Noviça','Irmã de Batalha','Irmã Veterana','Irmã Superiora','Palatina','Canonisa']:['Neófito','Iniciado','Guardião','Veterano','Comandante','Mestre do Mosteiro'];const ranks=names.map((name,i)=>[name,[0,500,1500,3500,7000,12000][i]]);let i=0;while(i<ranks.length-1&&xp>=ranks[i+1][1])i++;const [name,min]=ranks[i],next=ranks[i+1]?.[1]??null;return {name,min,next,progress:next?Math.min(1,Math.max(0,(xp-min)/(next-min))):1};}
+function exportBackup(s){validate(s);return JSON.stringify(s,null,2);}
+function importBackup(json){if(typeof json!=='string'||json.length>10000000)fail('Backup muito grande ou inválido.');return clone(validate(JSON.parse(json)));}
+function exportProfileBackup(s,profile){profileId(profile);validate(s);return JSON.stringify({format:'monastery-profile',version:1,profile,data:s},null,2);}
+function importProfileBackup(json,profile){profileId(profile);if(typeof json!=='string'||json.length>10000000)fail('Backup muito grande ou inválido.');const b=JSON.parse(json);if(b&&b.format==='monastery-profile'){if(b.version!==1)fail('Versão de backup incompatível.');profileId(b.profile);if(b.profile!==profile)fail('Este backup pertence a outra trajetória. Selecione o perfil correto antes de restaurar.');return clone(validate(b.data));}if(profile!=='astartes')fail('Backup antigo sem trajetória só pode ser restaurado no perfil Astartes.');return importBackup(json);}
+function load(storage=globalThis.localStorage){const raw=storage.getItem(KEY);return raw===null?initialState():importBackup(raw);}
+function save(s,storage=globalThis.localStorage){storage.setItem(KEY,exportBackup(s));return s;}
+return {KEY,initialState,validate,startSession,updateSet,finishSession,cancelSession,saveRoutine,deleteRoutine,sessionXP,totalXP,rankForXP,exportBackup,importBackup,exportProfileBackup,importProfileBackup,load,save};
+});

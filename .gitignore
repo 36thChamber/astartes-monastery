@@ -1,0 +1,7 @@
+# Local installers and exported workout data are not source code.
+setup/
+*-backup-*.json
+*-dados-brutos.txt
+.env
+.env.*
+node_modules/
